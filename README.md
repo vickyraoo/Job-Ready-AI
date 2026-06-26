@@ -1,7 +1,7 @@
 # Job-Ready-AI
 
 ## 1. Project Overview
-Resume Tailor is an AI-powered application that helps users optimize their resumes for Applicant Tracking Systems (ATS). The application provides comprehensive resume analysis, tailoring, and generates supporting documents for job applications.
+This is an AI-powered application that helps users optimize their resumes for Applicant Tracking Systems (ATS). The application provides comprehensive resume analysis, tailoring, and generates supporting documents for job applications.
 
 ## 2. Core Components
 
