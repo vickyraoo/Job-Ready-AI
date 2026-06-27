@@ -6,9 +6,9 @@ from bs4 import BeautifulSoup
 import requests
 from docx import Document
 from PyPDF2 import PdfReader
-from sentence_transformers import SentenceTransformer
 import os
 import json
+import re
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 import numpy as np
@@ -21,7 +21,13 @@ from workflow_manager import WorkflowManager
 
 # Load environment variables
 load_dotenv()
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+GROQ_API_KEY = "GROQ_API_KEY"
+
+@st.cache_resource
+def load_embedding_model():
+    """Cache the embedding model to prevent reloading on every Streamlit interaction."""
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer('all-MiniLM-L6-v2')
 
 class ResumeTailor:
     def __init__(self):
@@ -30,14 +36,22 @@ class ResumeTailor:
             raise ValueError("GROQ_API_KEY not found in environment variables")
             
         self.llm = ChatGroq(
-            model="qwen-2.5-32b",
+            model="llama-3.3-70b-versatile",
             groq_api_key=GROQ_API_KEY,
             temperature=0,
             max_tokens=None,
             timeout=None,
             max_retries=2
         )
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Use the cached model
+        self.embedding_model = load_embedding_model()
+        
+    def _extract_json_content(self, content: str) -> str:
+        """Safely extract JSON content from LLM response using regex."""
+        match = re.search(r'\{[\s\S]*\}', content)
+        if match:
+            return match.group(0)
+        return content.strip()
         
     def extract_text_from_pdf(self, pdf_file) -> str:
         """Extract text content from a PDF file using PyPDF2."""
@@ -78,13 +92,9 @@ class ResumeTailor:
         
         response = self.llm.invoke(prompt)
         try:
-            # Extract content and clean it to ensure it's valid JSON
-            content = str(response.content).strip()
-            if content.startswith("```json"):
-                content = content.split("```json")[1]
-            if content.endswith("```"):
-                content = content.rsplit("```", 1)[0]
-            return json.loads(content.strip())
+            # Extract content safely
+            content = self._extract_json_content(str(response.content))
+            return json.loads(content)
         except json.JSONDecodeError:
             # Fallback structure if parsing fails
             return {
@@ -188,11 +198,11 @@ class ResumeTailor:
                         skill_texts.append(var)
                         skill_map[var] = skill
                 
-                # Convert to embeddings
-                skill_embeddings = self.embedding_model.encode(skill_texts)
-                resume_embeddings = self.embedding_model.encode(resume_sentences)
+                # Convert to embeddings and NORMALIZE for accurate cosine similarity
+                skill_embeddings = self.embedding_model.encode(skill_texts, normalize_embeddings=True)
+                resume_embeddings = self.embedding_model.encode(resume_sentences, normalize_embeddings=True)
                 
-                # Calculate similarities
+                # Calculate similarities (now correctly bounded between -1 and 1)
                 similarities = resume_embeddings @ skill_embeddings.T
                 max_similarities = np.max(similarities, axis=0)
                 
@@ -220,6 +230,7 @@ class ResumeTailor:
                 'matched_skills': [],
                 'missing_skills': []
             }
+            
     def generate_cover_letter(self, resume_text: str, job_requirements: Dict, skill_matches: Dict) -> str:
         """Generate a personalized cover letter based on the resume and job requirements."""
         prompt = f"""Write a professional cover letter for a job application following this specific format and guidelines.
@@ -372,13 +383,8 @@ class ResumeTailor:
         
         analysis_response = self.llm.invoke(analysis_prompt)
         try:
-            content = str(analysis_response.content).strip()
-            # More robust JSON extraction
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0]
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0]
-            content = content.strip()
+            # Safely extract JSON using regex
+            content = self._extract_json_content(str(analysis_response.content))
             
             try:
                 analysis_result = json.loads(content)
@@ -546,9 +552,8 @@ class ResumeTailor:
         
         try:
             response = self.llm.invoke(prompt)
-            content = str(response.content).strip()
-            # Extract JSON content
-            content = self._extract_json_content(content)
+            # Safely extract JSON
+            content = self._extract_json_content(str(response.content))
             
             # Parse and validate
             result = self._validate_ats_score(json.loads(content))
@@ -557,14 +562,6 @@ class ResumeTailor:
         except Exception as e:
             st.error(f"Error in ATS scoring: {str(e)}")
             return self._get_default_ats_score()
-    
-    def _extract_json_content(self, content: str) -> str:
-        """Extract JSON content from LLM response."""
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-        return content.strip()
     
     def _validate_ats_score(self, score_data: Dict) -> Dict:
         """Validate and fix ATS score data."""
@@ -1100,7 +1097,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
